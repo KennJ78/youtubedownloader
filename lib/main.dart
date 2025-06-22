@@ -2,6 +2,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:open_file/open_file.dart';
 
 void main() {
   runApp(const YouTubeDownloaderApp());
@@ -13,106 +15,283 @@ class YouTubeDownloaderApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'YouTube Downloader',
-      home: const YouTubeDownloaderPage(),
       debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        colorSchemeSeed: Colors.red,
+        useMaterial3: true,
+      ),
+      home: const HomeScreen(),
     );
   }
 }
 
-class YouTubeDownloaderPage extends StatefulWidget {
-  const YouTubeDownloaderPage({super.key});
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
 
   @override
-  State<YouTubeDownloaderPage> createState() => _YouTubeDownloaderPageState();
+  State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _YouTubeDownloaderPageState extends State<YouTubeDownloaderPage> {
-  final TextEditingController _searchController = TextEditingController();
-  String _status = '';
+class _HomeScreenState extends State<HomeScreen> {
+  final _controller = TextEditingController();
+  double progress = 0.0;
+  String status = '';
+  List<File> downloadedFiles = [];
 
-  Future<void> _downloadVideo() async {
-    final query = _searchController.text.trim();
-    if (query.isEmpty) return;
+  @override
+  void initState() {
+    super.initState();
+    _loadDownloadedFiles();
+  }
 
-    setState(() => _status = 'Searching YouTube...');
-    var yt = YoutubeExplode();
+  Future<void> _loadDownloadedFiles() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final files = dir.listSync().whereType<File>().toList();
+    setState(() => downloadedFiles = files);
+  }
+
+  Future<void> startDownload(String option) async {
+    final link = _controller.text.trim();
+
+    // Validate link
+    if (link.isEmpty || !link.contains('youtube.com/watch?v=')) {
+      setState(() => status = 'Error: Please enter a valid YouTube link.');
+      return;
+    }
+
+    setState(() {
+      progress = 0;
+      status = 'Starting...';
+    });
 
     try {
-      // Search YouTube for the query
-      final searchResults = await yt.search.getVideos(query);
-
-      if (searchResults.isEmpty) {
-        setState(() => _status = 'No videos found.');
-        return;
-      }
-
-      final video = searchResults.first;
-      setState(() => _status = 'Fetching video info for: ${video.title}...');
-
+      final yt = YoutubeExplode();
+      final video = await yt.videos.get(link);
       final manifest = await yt.videos.streamsClient.getManifest(video.id);
-      final streamInfo = manifest.muxed.withHighestBitrate();
+
+      StreamInfo? streamInfo;
+      switch (option) {
+        case 'highQuality':
+          streamInfo = manifest.muxed.sortByVideoQuality().last; // Highest muxed
+          break;
+        case 'lowQuality':
+          streamInfo = manifest.muxed.sortByVideoQuality().first; // Lowest muxed
+          break;
+        case 'audio':
+          streamInfo = manifest.audio.sortByBitrate().last; // Highest audio bitrate
+          break;
+      }
 
       if (streamInfo == null) {
-        setState(() => _status = 'Error: No suitable stream found.');
+        setState(() => status = 'Error: No streams available.');
         return;
       }
 
-      final stream = yt.videos.streamsClient.get(streamInfo);
-
-      final directory = await getApplicationDocumentsDirectory();
-      final sanitizedTitle = video.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
-      final filePath = '${directory.path}/$sanitizedTitle.mp4';
+      final appDocDir = await getApplicationDocumentsDirectory();
+      final fileExt = option == 'audio' ? 'mp3' : 'mp4';
+      final filePath = '${appDocDir.path}/${video.title}.$fileExt';
       final file = File(filePath);
+      final fileStream = file.openWrite();
 
-      var output = file.openWrite();
+      final totalBytes = streamInfo.size.totalBytes;
+      var receivedBytes = 0;
 
-      setState(() => _status = 'Downloading: ${video.title}...');
-      await stream.pipe(output);
-      await output.flush();
-      await output.close();
+      await for (final data in yt.videos.streamsClient.get(streamInfo)) {
+        receivedBytes += data.length;
+        fileStream.add(data);
+        setState(() => progress = receivedBytes / totalBytes);
+      }
 
-      setState(() => _status = 'Downloaded: $sanitizedTitle\nSaved to:\n$filePath');
+      await fileStream.flush();
+      await fileStream.close();
+
+      setState(() => status = 'Downloaded: ${file.uri.pathSegments.last}');
+      await _loadDownloadedFiles();
     } catch (e) {
-      setState(() => _status = 'Error: $e');
-    } finally {
-      yt.close();
+      if (e.toString().contains('403')) {
+        setState(() => status = 'Error: 403 Forbidden — this video cannot be fetched. Try 720p or MP3.');
+      } else {
+        setState(() => status = 'Error: $e');
+      }
     }
+
   }
+
+  Widget _buildDownloadedFileTile(File file) {
+    return Card(
+      elevation: 2,
+      color: Colors.red.shade50,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: ListTile(
+        title: Text(
+          file.uri.pathSegments.last,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(
+          file.path,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        leading: const Icon(Icons.download, color: Colors.red),
+        onTap: () => OpenFile.open(file.path),
+        onLongPress: () async {
+          final confirm = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Delete file?'),
+              content: Text('Are you sure you want to delete ${file.uri.pathSegments.last}?'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text(
+                    'Delete',
+                    style: TextStyle(color: Colors.red),
+                  ),
+                ),
+              ],
+            ),
+          );
+
+          if (confirm == true) {
+            try {
+              await file.delete();
+              setState(() => downloadedFiles.remove(file));
+            } catch (e) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Error deleting file: $e')),
+              );
+            }
+          }
+        },
+        trailing: IconButton(
+          icon: const Icon(Icons.share, color: Colors.red),
+          onPressed: () => Share.shareXFiles(
+            [XFile(file.path)],
+            text: 'Check this file',
+          ),
+        ),
+      ),
+    );
+  }
+
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('YouTube Downloader'),
-        backgroundColor: Colors.redAccent,
+        title: const Text(
+          'YouTube Downloader',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        centerTitle: true,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            TextField(
-              controller: _searchController,
-              decoration: const InputDecoration(
-                labelText: 'Search video title',
-                border: OutlineInputBorder(),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "Enter a YouTube Link",
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
               ),
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton.icon(
-              onPressed: _downloadVideo,
-              icon: const Icon(Icons.download),
-              label: const Text('Download'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.redAccent,
+              const SizedBox(height: 12),
+              TextField(
+                controller: _controller,
+                decoration: InputDecoration(
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  prefixIcon: const Icon(Icons.link, color: Colors.red),
+                  hintText: 'https://youtube.com/watch?v=...',
+                  filled: true,
+                  fillColor: Colors.red.shade50,
+                ),
               ),
-            ),
-            const SizedBox(height: 20),
-            Text(
-              _status,
-              style: const TextStyle(fontSize: 16),
-            ),
-          ],
+              const SizedBox(height: 16),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 10,
+                  backgroundColor: Colors.red.shade100,
+                  color: Colors.red,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '${(progress * 100).toStringAsFixed(0)}%',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Colors.red.shade800,
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (status.isNotEmpty)
+                Text(
+                  status,
+                  style: const TextStyle(fontSize: 14, color: Colors.black87),
+                ),
+              const SizedBox(height: 24),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    onPressed: () => startDownload('highQuality'),
+                    child: const Text('1080p MP4', style: TextStyle(color: Colors.white)),
+                  ),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    onPressed: () => startDownload('lowQuality'),
+                    child: const Text('720p MP4', style: TextStyle(color: Colors.white)),
+                  ),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    onPressed: () => startDownload('audio'),
+                    child: const Text('MP3', style: TextStyle(color: Colors.white)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+              const Divider(thickness: 1),
+              const Text(
+                'Downloaded Files',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              if (downloadedFiles.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Center(
+                    child: Text(
+                      'No files yet.',
+                      style: TextStyle(fontSize: 16, color: Colors.black54),
+                    ),
+                  ),
+                )
+              else
+                Column(
+                  children: downloadedFiles
+                      .map((file) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4.0),
+                    child: _buildDownloadedFileTile(file),
+                  ))
+                      .toList(),
+                ),
+            ],
+          ),
         ),
       ),
     );
