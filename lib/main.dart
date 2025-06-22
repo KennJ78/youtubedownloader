@@ -109,7 +109,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await _loadDownloadedFiles();
     } catch (e) {
       if (e.toString().contains('403')) {
-        setState(() => status = 'Error: 403 Forbidden — this video cannot be fetched. Try 720p or MP3.');
+        setState(() => status = 'Error: 403 Forbidden — this video cannot be fetched. Try 720p or MP3 download.');
       } else {
         setState(() => status = 'Error: $e');
       }
