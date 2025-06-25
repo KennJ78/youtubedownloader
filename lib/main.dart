@@ -89,8 +89,12 @@ class _HomeScreenState extends State<HomeScreen> {
       await for (final data in yt.videos.streamsClient.get(streamInfo)) {
         receivedBytes += data.length;
         fileStream.add(data);
-        setState(() => progress = receivedBytes / totalBytes);
+        setState(() {
+          progress = (receivedBytes / totalBytes).clamp(0.0, 1.0);
+        });
+        await Future.delayed(const Duration(milliseconds: 50)); // <-- optional
       }
+
 
       await fileStream.flush();
       await fileStream.close();
