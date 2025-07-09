@@ -79,7 +79,9 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       final appDocDir = await getApplicationDocumentsDirectory();
-      final filePath = '${appDocDir.path}/${video.title}.mp3';
+      // Sanitize the video title for a valid filename
+      final safeTitle = video.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+      final filePath = '${appDocDir.path}/$safeTitle.mp3';
       final file = File(filePath);
       final fileStream = file.openWrite();
 
@@ -150,9 +152,18 @@ class _HomeScreenState extends State<HomeScreen> {
             setState(() => downloadedFiles.remove(file));
           }
         },
-        trailing: IconButton(
-          icon: const Icon(Icons.share, color: Colors.red),
-          onPressed: () => Share.shareXFiles([XFile(file.path)], text: 'Check this file'),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.play_arrow, color: Colors.green),
+              onPressed: () => OpenFile.open(file.path),
+            ),
+            IconButton(
+              icon: const Icon(Icons.share, color: Colors.red),
+              onPressed: () => Share.shareXFiles([XFile(file.path)], text: 'Check this file'),
+            ),
+          ],
         ),
       ),
     );
