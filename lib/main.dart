@@ -53,7 +53,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> startDownload(String option) async {
     final link = _controller.text.trim();
 
-    // Validate link
     if (link.isEmpty || !link.contains('youtube.com/watch?v=')) {
       setState(() => status = 'Error: Please enter a valid YouTube link.');
       return;
@@ -70,16 +69,8 @@ class _HomeScreenState extends State<HomeScreen> {
       final manifest = await yt.videos.streamsClient.getManifest(video.id);
 
       StreamInfo? streamInfo;
-      switch (option) {
-        case 'highQuality':
-          streamInfo = manifest.muxed.sortByVideoQuality().last; // Highest muxed
-          break;
-        case 'lowQuality':
-          streamInfo = manifest.muxed.sortByVideoQuality().first; // Lowest muxed
-          break;
-        case 'audio':
-          streamInfo = manifest.audio.sortByBitrate().last; // Highest audio bitrate
-          break;
+      if (option == 'audio') {
+        streamInfo = manifest.audio.sortByBitrate().last; // Highest audio
       }
 
       if (streamInfo == null) {
@@ -88,8 +79,7 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       final appDocDir = await getApplicationDocumentsDirectory();
-      final fileExt = option == 'audio' ? 'mp3' : 'mp4';
-      final filePath = '${appDocDir.path}/${video.title}.$fileExt';
+      final filePath = '${appDocDir.path}/${video.title}.mp3';
       final file = File(filePath);
       final fileStream = file.openWrite();
 
@@ -99,8 +89,12 @@ class _HomeScreenState extends State<HomeScreen> {
       await for (final data in yt.videos.streamsClient.get(streamInfo)) {
         receivedBytes += data.length;
         fileStream.add(data);
-        setState(() => progress = receivedBytes / totalBytes);
+        setState(() {
+          progress = (receivedBytes / totalBytes).clamp(0.0, 1.0);
+        });
+        await Future.delayed(const Duration(milliseconds: 50)); // <-- optional
       }
+
 
       await fileStream.flush();
       await fileStream.close();
@@ -108,13 +102,8 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() => status = 'Downloaded: ${file.uri.pathSegments.last}');
       await _loadDownloadedFiles();
     } catch (e) {
-      if (e.toString().contains('403')) {
-        setState(() => status = 'Error: 403 Forbidden — this video cannot be fetched. Try 720p or MP3 download.');
-      } else {
-        setState(() => status = 'Error: $e');
-      }
+      setState(() => status = 'Error: $e');
     }
-
   }
 
   Widget _buildDownloadedFileTile(File file) {
@@ -139,7 +128,7 @@ class _HomeScreenState extends State<HomeScreen> {
             context: context,
             builder: (context) => AlertDialog(
               title: const Text('Delete file?'),
-              content: Text('Are you sure you want to delete ${file.uri.pathSegments.last}?'),
+              content: Text('Delete ${file.uri.pathSegments.last}?'),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(context, false),
@@ -157,34 +146,24 @@ class _HomeScreenState extends State<HomeScreen> {
           );
 
           if (confirm == true) {
-            try {
-              await file.delete();
-              setState(() => downloadedFiles.remove(file));
-            } catch (e) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Error deleting file: $e')),
-              );
-            }
+            await file.delete();
+            setState(() => downloadedFiles.remove(file));
           }
         },
         trailing: IconButton(
           icon: const Icon(Icons.share, color: Colors.red),
-          onPressed: () => Share.shareXFiles(
-            [XFile(file.path)],
-            text: 'Check this file',
-          ),
+          onPressed: () => Share.shareXFiles([XFile(file.path)], text: 'Check this file'),
         ),
       ),
     );
   }
-
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'YouTube Downloader',
+          'YouTube Mp3 Downloader',
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         centerTitle: true,
@@ -234,35 +213,22 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: const TextStyle(fontSize: 14, color: Colors.black87),
                 ),
               const SizedBox(height: 24),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              // Only one centered MP3 button
+              Center(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
                     ),
-                    onPressed: () => startDownload('highQuality'),
-                    child: const Text('1080p MP4', style: TextStyle(color: Colors.white)),
                   ),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
-                    onPressed: () => startDownload('lowQuality'),
-                    child: const Text('720p MP4', style: TextStyle(color: Colors.white)),
+                  onPressed: () => startDownload('audio'),
+                  child: const Text(
+                    'Start Download MP3',
+                    style: TextStyle(color: Colors.white),
                   ),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
-                    onPressed: () => startDownload('audio'),
-                    child: const Text('MP3', style: TextStyle(color: Colors.white)),
-                  ),
-                ],
+                ),
               ),
               const SizedBox(height: 24),
               const Divider(thickness: 1),
